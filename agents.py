@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, END
 from document_store import DocumentStore
+from IPython.display import Image, display
 
 # 状態の型定義
 class AgentState(TypedDict):
@@ -165,6 +166,7 @@ def create_responder_agent():
 
 # 状態の遷移ルートを決定する関数
 def route(state: AgentState) -> Literal["retriever", "planner", "responder", "end"]:
+    print(state["messages"])
     return state["next"]
 
 # マルチエージェントRAGシステムを作成
@@ -199,9 +201,12 @@ def create_multi_agent_rag(document_store: DocumentStore = None):
     # 開始ノードを設定
     workflow.set_entry_point("retriever")
     workflow.set_finish_point("end")
-    
+
+    graph = workflow.compile()
+    print(graph.get_graph().draw_mermaid())
+        
     # グラフをコンパイル
-    return workflow.compile()
+    return graph
 
 # マルチエージェントRAGを使って応答を生成する関数
 def get_multi_agent_response(query: str, document_store: DocumentStore = None, show_thoughts: bool = True):
