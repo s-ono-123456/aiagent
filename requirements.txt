@@ -9,3 +9,4 @@ langsmith
 faiss-cpu
 sentence-transformers
 langchain-huggingface
+langchain-mcp-adapters
