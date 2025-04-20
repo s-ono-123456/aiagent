@@ -9,4 +9,3 @@ langsmith
 faiss-cpu
 sentence-transformers
 langchain-huggingface
-ipython
