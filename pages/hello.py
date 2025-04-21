@@ -4,7 +4,7 @@ import json
 import asyncio
 from typing import Annotated, TypedDict, List, Dict, Any, Literal
 import operator
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, AnyMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, AnyMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
@@ -14,6 +14,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph import StateGraph, END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
+import time
+import base64
 
 # 環境変数の読み込み
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -30,7 +32,7 @@ def create_graph(state: GraphState, tools, model_chain):
         messages = state["messages"]
         last_message = messages[-1]
         print(f"Last message: {last_message}")
-        print(last_message.tool_calls)
+        # print(last_message.tool_calls)
         # ツール呼び出しがある場合はツールノードへ、そうでなければ終了
         return_value = "tools" if last_message.tool_calls else END
         print(f"Return value: {return_value}")
@@ -85,6 +87,8 @@ async def run_mcp_agent_async(query):
 あなたは役に立つAIアシスタントです。日本語で回答し、考えた過程を結論より前に出力してください。
 あなたは、「Playwright」というブラウザを操作するツールを利用することができます。適切に利用してユーザーからの質問に回答してください。
 ツールを利用する場合は、必ずツールから得られた情報のみを利用して回答してください。
+また、表示したサイトは「browser_screen_capture」のツールを利用してスクリーンショットを撮影してください。
+ページの表示領域が最下部でない場合は、スクロールして画面を移動させてからもう一度撮影してください。
 
 ユーザーの質問からツールをどのような意図で何回利用する必要があるかを判断し、必要なら複数回ツールを利用して情報収集をした後、
 すべての情報が取得できたら、その情報を元に返答してください。
@@ -114,7 +118,29 @@ async def run_mcp_agent_async(query):
         # グラフの実行
         graph_config = {"configurable": {"thread_id": "12345"}}
         response = await graph.ainvoke({"messages": input_query}, graph_config)
-        print(f"Response: {response}")
+        # print(f"Response: {response}")
+        # レスポンスからスクリーンショットを抽出して保存
+        for message in response["messages"]:
+            # print(f"Message: {message}")
+            print("")
+            if isinstance(message, ToolMessage):
+                artifacts = message.artifact
+                if artifacts:
+                    print(f"artifact num: {len(artifacts)}")
+                    for i, artifact in enumerate(artifacts):
+                        if artifact.data:
+                            # 一時的なスクリーンショット保存用ディレクトリの作成
+                            os.makedirs("screenshots", exist_ok=True)
+                            
+                            # ファイル名の作成（タイムスタンプ付き）
+                            timestamp = int(time.time())
+                            filename = f"screenshots/screenshot_{timestamp}.png"
+                            
+                            # Base64デコードしてファイルに保存
+                            with open(filename, "wb") as f:
+                                f.write(base64.b64decode(artifact.data))
+                            
+                            print(f"スクリーンショットを保存しました: {filename}")
 
         # 結果を返す
         return response["messages"][-1].content
@@ -145,7 +171,7 @@ st.write("URLを含む質問を入力すると、AIがブラウザでWebサイ�
 
 # サンプル質問
 st.subheader("サンプル質問")
-st.code("https://zenn.dev/asap/articles/59b8dd06d44754を読んで要約して")
+st.code("https://zenn.dev/asap/articles/59b8dd06d44754を読んでスクリーンショットを撮影してください")
 st.code("https://github.com/microsoft/playwright-mcpの機能について教えて")
 
 # ユーザー入力
@@ -169,6 +195,7 @@ if st.button("送信"):
         with st.spinner("AIがブラウザを操作して回答を生成中..."):
             # ThreadPoolExecutorを使用した同期処理に変更
             result = run_mcp_agent(query)
+
             st.session_state.result = result
         
         # 処理中フラグをオフ

@@ -114,3 +114,6 @@ venv/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+screenshot/*.png
+screenshot/*.jpg
