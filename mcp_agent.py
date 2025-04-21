@@ -16,14 +16,175 @@ from langgraph.checkpoint.memory import MemorySaver
 import time
 import base64
 
-# 環境変数の読み込み
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
 # 状態の型定義
 class GraphState(TypedDict):
-    messages: Annotated[List[AnyMessage], operator.add]
+    messages: List[Any]  # HumanMessageやAIMessageのリスト
+    query: str
+    thoughts: str
+    response: str
+    agent_thoughts: List[Dict[str, str]]  # 各エージェントの思考過程を保存するリスト
 
-def create_graph(state: GraphState, tools, model_chain):
+# エージェントのLLMモデル
+def get_agent_llm(model_name="gpt-4.1-nano"):
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0.2,
+        openai_api_key=os.getenv("OPENAI_API_KEY")
+    )
+
+def run_async_in_sync(async_func, *args, **kwargs):
+    """非同期関数を同期的に実行するヘルパー関数"""
+    # Windowsの場合はProactorEventLoopを使用
+    if os.name == 'nt':
+        loop = asyncio.ProactorEventLoop()
+    else:
+        loop = asyncio.new_event_loop()
+    
+    asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(async_func(*args, **kwargs))
+    finally:
+        loop.close()
+
+def create_planner_agent():
+    """プランナーエージェントの作成"""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """あなたは計画立案エージェントです。
+        ユーザーのクエリを分析し、適切なテスト実行計画を立ててください。
+        複雑なクエリの場合は、複数のステップに分けて計画を立てることができます。"""),
+        MessagesPlaceholder(variable_name="messages"),
+        ("user", """
+         本システムは、ユーザの入力に基づいて、検索処理を行うシステムです。
+         ユーザのクエリに基づいて、適切なテスト実行計画を立ててください。
+         クエリ: 
+         {query}
+         
+         これらの情報をもとに、テスト実行計画を立ててください。""")
+    ])
+    
+    llm = get_agent_llm()
+    
+    def _planning_chain(state):
+        planning_input = {
+            "messages": state["messages"],
+            "query": state["query"],
+        }
+        
+        plan = prompt | llm | StrOutputParser()
+        plan_result = plan.invoke(planning_input)
+        
+        thoughts = f"計画: {plan_result}"
+        
+        # 思考過程を状態オブジェクトに保存
+        state["agent_thoughts"].append({
+            "agent": "planner",
+            "thought": thoughts
+        })
+        print(f"Planning thoughts: {thoughts}")
+        return {
+            "thoughts": thoughts,
+            "agent_thoughts": state.get("agent_thoughts", [])
+        }
+
+    return _planning_chain
+
+def create_test_executor_agent(tools):
+    """テスト実行エージェントの作成"""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """あなたはテスト実行エージェントです。
+        あなたは、「Playwright」というブラウザを操作するツールを利用することができます。
+        ユーザーのクエリに基づいて、適切なテストを実行してください。
+        テストを実行するための具体的な手順を考えてください。"""),
+        MessagesPlaceholder(variable_name="messages"),
+        ("user", """クエリ: 
+         {query}
+         
+         計画：
+         {thoughts}
+
+         これまで実施した内容：
+         {agent_thoughts}
+         
+         これらの情報をもとに、テストを実行してください。""")
+    ])
+    
+    llm = get_agent_llm().bind_tools(tools)
+    
+    def _test_executor_chain(state):
+        test_input = {
+            "query": state["query"],
+            "messages": state["messages"],
+            "thoughts": state["thoughts"],
+            "agent_thoughts": state.get("agent_thoughts", [])
+        }
+        
+        test_result = prompt | llm | StrOutputParser()
+        test_response = test_result.invoke(test_input)
+        
+        thoughts = f"テスト結果: {test_response}"
+        
+        # 思考過程を状態オブジェクトに保存
+        state["agent_thoughts"].append({
+            "agent": "test_executor",
+            "thought": thoughts
+        })
+        print(f"Test executor thoughts: {thoughts}")
+        
+        return {
+            "thoughts": thoughts,
+            "agent_thoughts": state.get("agent_thoughts", [])
+        }
+
+    return _test_executor_chain
+
+def create_screenshot_agent(tools):
+    """スクリーンショットエージェントの作成"""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """あなたはスクリーンショットエージェントです。
+        あなたは、「Playwright」というブラウザを操作するツールを利用することができます。
+        ユーザーのクエリに基づいて、適切なスクリーンショットを取得してください。
+        スクリーンショットを取得するための具体的な手順を考えてください。"""),
+        MessagesPlaceholder(variable_name="messages"),
+        ("user", """クエリ: 
+         {query}
+
+         いままでの情報：
+         {agent_thoughts}
+         
+         これらの情報をもとに、スクリーンショットを取得してください。""")
+    ])
+    
+    llm = get_agent_llm().bind_tools(tools)
+    
+    def _screenshot_chain(state, tools):
+        screenshot_input = {
+            "query": state["query"],
+            "agent_thoughts": state["agent_thoughts"],
+            "messages": state["messages"],
+            "thoughts": state["thoughts"]
+        }
+        
+        screenshot = prompt | llm | StrOutputParser()
+        screenshot_result = screenshot.invoke(screenshot_input)
+        
+        thoughts = f"スクリーンショット: {screenshot_result}"
+        
+        # 思考過程を状態オブジェクトに保存
+        state["agent_thoughts"].append({
+            "agent": "screenshot",
+            "thought": thoughts
+        })
+        
+        return {
+            "thoughts": thoughts,
+            "agent_thoughts": state.get("agent_thoughts", []),
+        }
+
+    return _screenshot_chain
+
+
+def create_graph(state: GraphState, tools):
     """LangGraphによるエージェントグラフの作成"""
     
     def should_continue(state):
@@ -37,24 +198,41 @@ def create_graph(state: GraphState, tools, model_chain):
         print(f"Return value: {return_value}")
         return return_value
     
-    def call_model(state):
-        """モデルを呼び出す関数"""
-        messages = state["messages"]
-        response = model_chain.invoke(messages)
-        return {"messages": [response]}
+    # def call_model(state):
+    #     """モデルを呼び出す関数"""
+    #     messages = state["messages"]
+    #     response = model_chain.invoke(messages)
+    #     return {"messages": [response]}
+    
+    # def take_screenshot(state):
+    #     """ツールノードでアクセスした画面をスクリーンショットAIに渡す関数"""
+    #     messages = state["messages"]
+    #     last_message = messages[-1]
+    #     print(f"Last message: {last_message}")
+
+    #     query = "現在の画面をスクリーンショットとして保存してください。"
+    #     response = model_chain.invoke(query)
+    #     return {"messages": [response]}
     
     # ツールノードの作成
     tool_node = ToolNode(tools)
+    screenshottool = ToolNode(tools)
     
     # グラフの作成
     workflow = StateGraph(state)
-    workflow.add_node("agent", call_model)
+    workflow.add_node("planning", create_planner_agent())
+    workflow.add_node("testing", create_test_executor_agent(tools))
     workflow.add_node("tools", tool_node)
+    workflow.add_node("screenshotagent", create_screenshot_agent(tools))
+    workflow.add_node("screenshottool", screenshottool)
     
     # エッジの追加
-    workflow.add_edge(START, "agent")
-    workflow.add_edge("tools", "agent")
-    workflow.add_conditional_edges("agent", should_continue, {
+    workflow.add_edge(START, "planning")
+    workflow.add_edge("planning", "testing")
+    workflow.add_edge("tools", "screenshotagent")
+    workflow.add_edge("screenshotagent", "screenshottool")
+    workflow.add_edge("screenshottool", "testing")
+    workflow.add_conditional_edges("testing", should_continue, {
         "tools": "tools",
         END: END
     })
@@ -69,36 +247,21 @@ def create_graph(state: GraphState, tools, model_chain):
 async def run_mcp_agent_async(query):
     """MCPエージェントを実行する非同期関数"""
     
-    # モデルの定義（OpenAIのgpt-4.1-nanoを使用）
-    model = ChatOpenAI(
-        model="gpt-4.1-nano",
-        openai_api_key=openai_api_key,
-        temperature=0.2,
-    )
-    
     # MCPの設定を読み込む
     with open("mcp_config.json", "r") as f:
         mcp_config = json.load(f)
     
-    # システムメッセージとプロンプトの設定
-    message = [
-        SystemMessage(content="""
-あなたは役に立つAIアシスタントです。日本語で回答し、考えた過程を結論より前に出力してください。
-あなたは、「Playwright」というブラウザを操作するツールを利用することができます。適切に利用してユーザーからの質問に回答してください。
-ツールを利用する場合は、必ずツールから得られた情報のみを利用して回答してください。
-また、表示したサイトは「browser_screen_capture」のツールを利用してスクリーンショットを撮影してください。
-ページの表示領域が最下部でない場合は、スクロールして画面を移動させてからもう一度撮影してください。
+    # 初期状態を設定
+    initial_state = {
+        "messages": [HumanMessage(content=query)],
+        "query": query,
+        "thoughts": "",
+        "response": "",
+        "agent_thoughts": [],  # 各エージェントの思考過程を保存するリスト
+    }
 
-ユーザーの質問からツールをどのような意図で何回利用する必要があるかを判断し、必要なら複数回ツールを利用して情報収集をした後、
-すべての情報が取得できたら、その情報を元に返答してください。
-
-なお、サイトのアクセスでエラーが出た場合は、もう一度再試行してください。ネットワーク関連のエラーの場合があります。
-"""),
-        MessagesPlaceholder("messages"),
-    ]
-    
     # プロンプトの作成
-    prompt = ChatPromptTemplate.from_messages(message)
+    # prompt = ChatPromptTemplate.from_messages(message)
     
     # MCPクライアントの作成と実行
     async with MultiServerMCPClient(mcp_config["mcpServers"]) as mcp_client:
@@ -106,17 +269,14 @@ async def run_mcp_agent_async(query):
         tools = mcp_client.get_tools()
         
         # モデルにツールをバインド
-        model_with_tools = prompt | model.bind_tools(tools)
+        # model_with_tools = prompt | model.bind_tools(tools)
         
         # グラフの作成
-        graph = create_graph(GraphState, tools, model_with_tools)
-        
-        # 入力クエリの作成
-        input_query = [HumanMessage(content=query)]
+        graph = create_graph(GraphState, tools)
         
         # グラフの実行
         graph_config = {"configurable": {"thread_id": "12345"}}
-        response = await graph.ainvoke({"messages": input_query}, graph_config)
+        response = await graph.ainvoke(initial_state, config=graph_config)
         # print(f"Response: {response}")
         # レスポンスからスクリーンショットを抽出して保存
         for message in response["messages"]:
@@ -146,17 +306,4 @@ async def run_mcp_agent_async(query):
 
 def run_mcp_agent(query):
     """ThreadPoolExecutorを使用して非同期関数を同期的に実行するラッパー関数"""
-    # 新しいループを作成
-    # Windows環境での非同期処理のためにProactorEventLoopを使用
-    if os.name == 'nt':
-        loop = asyncio.ProactorEventLoop()
-    else:
-        loop = asyncio.new_event_loop()
-
-    # ループをセット
-    asyncio.set_event_loop(loop)
-    
-    # ThreadPoolExecutorを使用して別スレッドで非同期関数を実行
-    with ThreadPoolExecutor() as executor:
-        future = executor.submit(lambda: loop.run_until_complete(run_mcp_agent_async(query)))
-        return future.result()
+    return run_async_in_sync(run_mcp_agent_async, query)
