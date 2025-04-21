@@ -22,6 +22,7 @@ class GraphState(TypedDict):
     query: str
     thoughts: str
     response: str
+    plan: str
     agent_thoughts: List[Dict[str, str]]  # 各エージェントの思考過程を保存するリスト
 
 # エージェントのLLMモデル
@@ -71,16 +72,20 @@ def create_planner_agent():
             "query": state["query"],
         }
         
-        plan = prompt | llm | StrOutputParser()
+        plan = prompt | llm
         plan_result = plan.invoke(planning_input)
         
-        thoughts = f"計画: {plan_result}"
+        thoughts = f"計画: {plan_result.content}"
+        plan = plan_result.content
         
         # 思考過程を状態オブジェクトに保存
         state["agent_thoughts"].append({
             "agent": "planner",
             "thought": thoughts
         })
+
+        state["plan"] = plan
+        state["messages"].append(plan_result)
         print(f"Planning thoughts: {thoughts}")
         return {
             "thoughts": thoughts,
@@ -101,7 +106,7 @@ def create_test_executor_agent(tools):
          {query}
          
          計画：
-         {thoughts}
+         {plan}
 
          これまで実施した内容：
          {agent_thoughts}
@@ -116,24 +121,31 @@ def create_test_executor_agent(tools):
             "query": state["query"],
             "messages": state["messages"],
             "thoughts": state["thoughts"],
+            "plan": state["plan"],
             "agent_thoughts": state.get("agent_thoughts", [])
         }
+        last_message = state["messages"][-1]
+        print()
+        print("test execution agent")
+        print(f"Last message type: {type(last_message)}")
+        print(f"Last message: {last_message}")
         
-        test_result = prompt | llm | StrOutputParser()
+        test_result = prompt | llm
         test_response = test_result.invoke(test_input)
         
-        thoughts = f"テスト結果: {test_response}"
+        thoughts = f"テスト結果: {test_response.content}"
         
         # 思考過程を状態オブジェクトに保存
         state["agent_thoughts"].append({
             "agent": "test_executor",
             "thought": thoughts
         })
+        state["messages"].append(test_response)
         print(f"Test executor thoughts: {thoughts}")
         
         return {
             "thoughts": thoughts,
-            "agent_thoughts": state.get("agent_thoughts", [])
+            "agent_thoughts": state.get("agent_thoughts", []),
         }
 
     return _test_executor_chain
@@ -146,8 +158,8 @@ def create_screenshot_agent(tools):
         ユーザーのクエリに基づいて、適切なスクリーンショットを取得してください。
         スクリーンショットを取得するための具体的な手順を考えてください。"""),
         MessagesPlaceholder(variable_name="messages"),
-        ("user", """クエリ: 
-         {query}
+        ("user", """計画：
+         {plan}
 
          いままでの情報：
          {agent_thoughts}
@@ -157,15 +169,23 @@ def create_screenshot_agent(tools):
     
     llm = get_agent_llm().bind_tools(tools)
     
-    def _screenshot_chain(state, tools):
+    def _screenshot_chain(state):
         screenshot_input = {
             "query": state["query"],
             "agent_thoughts": state["agent_thoughts"],
             "messages": state["messages"],
+            "plan": state["plan"],
             "thoughts": state["thoughts"]
         }
+        last_message = state["messages"][-1]
+        print()
+        print("screenshot agent")
+        print(f"Last message type: {type(last_message)}")
+        print(f"Last message: {last_message}")
+
+        print(last_message)
         
-        screenshot = prompt | llm | StrOutputParser()
+        screenshot = prompt | llm
         screenshot_result = screenshot.invoke(screenshot_input)
         
         thoughts = f"スクリーンショット: {screenshot_result}"
@@ -175,6 +195,7 @@ def create_screenshot_agent(tools):
             "agent": "screenshot",
             "thought": thoughts
         })
+        state["messages"].append(screenshot_result)
         
         return {
             "thoughts": thoughts,
@@ -191,28 +212,13 @@ def create_graph(state: GraphState, tools):
         """次のノードを決定する関数"""
         messages = state["messages"]
         last_message = messages[-1]
+        print(f"Last message type: {type(last_message)}")
         print(f"Last message: {last_message}")
         # print(last_message.tool_calls)
         # ツール呼び出しがある場合はツールノードへ、そうでなければ終了
         return_value = "tools" if last_message.tool_calls else END
         print(f"Return value: {return_value}")
         return return_value
-    
-    # def call_model(state):
-    #     """モデルを呼び出す関数"""
-    #     messages = state["messages"]
-    #     response = model_chain.invoke(messages)
-    #     return {"messages": [response]}
-    
-    # def take_screenshot(state):
-    #     """ツールノードでアクセスした画面をスクリーンショットAIに渡す関数"""
-    #     messages = state["messages"]
-    #     last_message = messages[-1]
-    #     print(f"Last message: {last_message}")
-
-    #     query = "現在の画面をスクリーンショットとして保存してください。"
-    #     response = model_chain.invoke(query)
-    #     return {"messages": [response]}
     
     # ツールノードの作成
     tool_node = ToolNode(tools)
@@ -257,6 +263,7 @@ async def run_mcp_agent_async(query):
         "query": query,
         "thoughts": "",
         "response": "",
+        "plan": "",
         "agent_thoughts": [],  # 各エージェントの思考過程を保存するリスト
     }
 
