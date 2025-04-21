@@ -11,7 +11,11 @@ st.write("URLを含む質問を入力すると、AIがブラウザでWebサイ�
 # サンプル質問
 st.subheader("サンプル質問")
 st.code("https://zenn.dev/asap/articles/59b8dd06d44754を読んでスクリーンショットを撮影してください")
-st.code("https://github.com/microsoft/playwright-mcpの機能について教えて")
+st.code("""
+https://google.co.jpにアクセスして、スクリーンショットを撮影してください。
+Googleと入力してスクリーンショットを撮影してください。
+検索処理を動かしてスクリーンショットを撮影してください。
+        """)
 
 # ユーザー入力
 query = st.text_area("質問を入力してください:", height=100)

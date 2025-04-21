@@ -39,6 +39,8 @@ def create_graph(state: GraphState, tools, model_chain):
     
     def call_model(state):
         """モデルを呼び出す関数"""
+        last_message = state["messages"][-1]
+        print(f"Last message: {last_message}")
         messages = state["messages"]
         response = model_chain.invoke(messages)
         return {"messages": [response]}
@@ -86,22 +88,34 @@ async def run_mcp_agent_async(query):
 あなたは役に立つAIアシスタントです。日本語で回答し、考えた過程を結論より前に出力してください。
 あなたは、「Playwright」というブラウザを操作するツールを利用することができます。適切に利用してユーザーからの質問に回答してください。
 ツールを利用する場合は、必ずツールから得られた情報のみを利用して回答してください。
-また、表示したサイトは「browser_screen_capture」のツールを利用してスクリーンショットを撮影してください。
-ページの表示領域が最下部でない場合は、スクロールして画面を移動させてからもう一度撮影してください。
+また、操作を行った後は「browser_screen_capture」のツールを利用してスクリーンショットを撮影してください。
 
 ユーザーの質問からツールをどのような意図で何回利用する必要があるかを判断し、必要なら複数回ツールを利用して情報収集をした後、
 すべての情報が取得できたら、その情報を元に返答してください。
-
-なお、サイトのアクセスでエラーが出た場合は、もう一度再試行してください。ネットワーク関連のエラーの場合があります。
 """),
         MessagesPlaceholder("messages"),
     ]
     
     # プロンプトの作成
     prompt = ChatPromptTemplate.from_messages(message)
+    session_id = f"session_{int(time.time())}"
     
     # MCPクライアントの作成と実行
-    async with MultiServerMCPClient(mcp_config["mcpServers"]) as mcp_client:
+    async with MultiServerMCPClient(
+        mcp_config["mcpServers"]
+    ) as mcp_client:
+        # Playwrightの設定を構成
+        playwright_config = {
+            "browser_session_id": session_id,
+            "user_data_dir": f"./browser_data_{session_id}",
+            "headless": True,
+            "timeout": 600000  # タイムアウトを600秒に設定
+        }
+        
+        # 設定をクライアントに適用（必要に応じて）
+        if hasattr(mcp_client, "configure"):
+            await mcp_client.configure("playwright", playwright_config)
+        
         # ツールの取得
         tools = mcp_client.get_tools()
         
@@ -119,9 +133,11 @@ async def run_mcp_agent_async(query):
         response = await graph.ainvoke({"messages": input_query}, graph_config)
         # print(f"Response: {response}")
         # レスポンスからスクリーンショットを抽出して保存
+        num = 0
         for message in response["messages"]:
             # print(f"Message: {message}")
             print("")
+            num += 1
             if isinstance(message, ToolMessage):
                 artifacts = message.artifact
                 if artifacts:
@@ -133,7 +149,7 @@ async def run_mcp_agent_async(query):
                             
                             # ファイル名の作成（タイムスタンプ付き）
                             timestamp = int(time.time())
-                            filename = f"screenshots/screenshot_{timestamp}.png"
+                            filename = f"screenshots/screenshot_{timestamp}_{num}.png"
                             
                             # Base64デコードしてファイルに保存
                             with open(filename, "wb") as f:
