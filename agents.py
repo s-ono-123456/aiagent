@@ -171,24 +171,20 @@ def create_responder_agent():
     return _response_chain
 
 # 状態の遷移ルートを決定する関数
-def route(state: AgentState) -> Literal["retriever", "planner", "responder", "endagent"]:
+def route(state: AgentState) -> Literal["retriever", "planner", "responder", "end"]:
     print(state["messages"])
     return state["next"]
 
 # マルチエージェントRAGシステムを作成
 def create_multi_agent_rag(document_store: DocumentStore = None):
+    def should_continue(state):
+        next = state["next"]
+        if next == "end":
+            return END
+        return "planner"
+
     if document_store is None:
         document_store = DocumentStore()
-        
-        # サンプルドキュメントを追加
-        sample_texts = [
-            "LangGraphは、LangChainエコシステムの一部で、複雑なAIアプリケーションを構築するためのフレームワークです。",
-            "LangGraphを使用すると、複数のエージェントを組み合わせたワークフローを定義できます。",
-            "RAG（検索拡張生成）は、LLMに外部データを提供するテクニックです。",
-            "マルチエージェントシステムでは、異なる役割を持つ複数のAIエージェントが協力して問題を解決します。",
-            "エージェントは特定のタスクに最適化された専門家として機能し、より複雑な問題を解決するために協力します。"
-        ]
-        document_store.add_documents(sample_texts)
     
     # ワークフローグラフを作成
     workflow = StateGraph(AgentState)
@@ -197,17 +193,13 @@ def create_multi_agent_rag(document_store: DocumentStore = None):
     workflow.add_node("retriever", create_retriever_agent(document_store))
     workflow.add_node("planner", create_planner_agent())
     workflow.add_node("responder", create_responder_agent())
-    workflow.add_node("endagent", lambda state: { "response": state["response"], "next": "end"})
     
     # エッジを定義（エージェント間の遷移）
-    workflow.add_edge(START, "planner")
-    workflow.add_conditional_edges("retriever", route)
-    workflow.add_conditional_edges("planner", route)
-    workflow.add_conditional_edges("responder", route)
+    workflow.add_edge(START, "retriever")
+    workflow.add_edge("retriever", "planner")
+    workflow.add_edge("planner", "responder")
+    workflow.add_conditional_edges("responder", should_continue, ["planner", END])
     
-    # 開始ノードを設定
-    workflow.set_finish_point("endagent")
-
     graph = workflow.compile()
     
     # Mermaidダイアグラムを取得（コメントアウトを解除）
@@ -246,10 +238,12 @@ def get_multi_agent_response(query: str, document_store: DocumentStore = None, s
         
         return {
             "thoughts": thoughts_text,
-            "response": result["response"]
+            "response": result["response"],
+            "documents": result.get("documents", [])  # 検索されたドキュメントを追加
         }
     else:
         # 思考過程なしで応答のみ返す
         return {
-            "response": result["response"]
+            "response": result["response"],
+            "documents": result.get("documents", [])  # 検索されたドキュメントを追加
         }

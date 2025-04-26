@@ -47,7 +47,7 @@ doc_store = get_document_store()
 categories = doc_store.get_all_categories()
 
 # タブの作成
-main_tab, thoughts_tab, workflow_tab, add_doc_tab = st.tabs(["メインチャット", "エージェント思考過程", "ワークフローグラフ", "ドキュメント追加"])
+main_tab, thoughts_tab, documents_tab, workflow_tab, add_doc_tab = st.tabs(["メインチャット", "エージェント思考過程", "検索ドキュメント", "ワークフローグラフ", "ドキュメント追加"])
 
 with main_tab:
     # マルチエージェントRAGセクション
@@ -70,7 +70,7 @@ with main_tab:
     show_thoughts = st.checkbox("エージェントの思考過程を表示", value=True)
 
     # ユーザーからの入力を受け取る
-    user_input_rag = st.text_input("質問を入力してください:", key="rag_input")
+    user_input_rag = st.text_input("質問を入力してください:", key="rag_input", value="受注処理の詳細を教えてください")
 
     # 結果表示用のセッション状態変数
     if 'result' not in st.session_state:
@@ -94,6 +94,28 @@ with thoughts_tab:
     else:
         st.info("エージェントの思考過程はまだありません。メインチャットタブで質問を入力してください。")
 
+with documents_tab:
+    st.header("検索されたドキュメント一覧")
+    
+    if st.session_state.get('result') and "documents" in st.session_state.result and st.session_state.result["documents"]:
+        documents = st.session_state.result["documents"]
+        st.write(f"検索結果: {len(documents)}件のドキュメントが見つかりました")
+        
+        for i, doc in enumerate(documents):
+            # メタデータから情報を取得
+            source = doc.metadata.get('source', '不明')
+            filename = doc.metadata.get('filename', os.path.basename(source) if source != '不明' else '不明')
+            category = doc.metadata.get('category', '不明')
+            
+            # エキスパンダーを使用してドキュメント内容を表示
+            with st.expander(f"ドキュメント {i+1}: {filename}"):
+                st.markdown("**カテゴリ**: " + category)
+                st.markdown("**ソース**: " + source)
+                st.markdown("**内容**:")
+                st.markdown(doc.page_content)
+    else:
+        st.info("検索されたドキュメントはまだありません。メインチャットタブで質問を入力してください。")
+
 with workflow_tab:
     st.header("エージェントのワークフローグラフ")
     
@@ -107,29 +129,9 @@ with workflow_tab:
     
     # streamlit-mermaidを使用してグラフを視覚化
     st.markdown("### グラフの視覚化")
-    st_mermaid(st.session_state.workflow_graph)
+    st_mermaid(st.session_state.workflow_graph, show_controls=False)
     
     # Mermaidダイアグラムをテキスト形式で表示
     st.markdown("### Mermaidグラフ (テキスト形式)")
     st.code(st.session_state.workflow_graph, language="mermaid")
     
-
-with add_doc_tab:
-    st.header("ドキュメントの追加")
-    
-    new_doc = st.text_area("新しいドキュメントを追加:", placeholder="ここに新しいドキュメントを入力してください")
-
-    # カテゴリ選択
-    new_doc_category = st.selectbox(
-        "追加先カテゴリ", 
-        ["default"] + categories, 
-        index=0
-    )
-
-    if st.button("追加"):
-        if new_doc:
-            doc_store.add_documents([new_doc], category=new_doc_category)
-            doc_store.save_index(new_doc_category)
-            st.success(f"ドキュメントがカテゴリ「{new_doc_category}」に追加されました！")
-        else:
-            st.error("ドキュメントを入力してください")

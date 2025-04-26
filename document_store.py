@@ -160,3 +160,16 @@ class DocumentStore:
     def get_all_categories(self) -> List[str]:
         """利用可能なすべてのカテゴリを取得する"""
         return list(self.vectorstores.keys())
+        
+    def get_documents(self, category: str) -> List[Document]:
+        """指定したカテゴリのドキュメントを取得する
+        
+        Args:
+            category: ドキュメントを取得するカテゴリ名
+        
+        Returns:
+            指定したカテゴリのドキュメントリスト。カテゴリが存在しない場合は空リスト
+        """
+        if category in self.documents:
+            return self.documents[category]
+        return []
