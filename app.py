@@ -47,8 +47,26 @@ doc_store = get_document_store()
 categories = doc_store.get_all_categories()
 
 # タブの作成
-main_tab, thoughts_tab, documents_tab, workflow_tab, add_doc_tab = st.tabs(["メインチャット", "エージェント思考過程", "検索ドキュメント", "ワークフローグラフ", "ドキュメント追加"])
+workflow_tab, main_tab, thoughts_tab, documents_tab = st.tabs(["ワークフローグラフ", "メインチャット", "エージェント思考過程", "検索ドキュメント"])
 
+with workflow_tab:
+    st.header("エージェントのワークフローグラフ")
+    
+    # エージェントのワークフローグラフを取得して表示
+    if 'workflow_graph' not in st.session_state:
+        # エージェントのグラフを生成
+        graph = create_multi_agent_rag(doc_store)
+        # Mermaidダイアグラムを取得
+        mermaid_code = graph.get_graph().draw_mermaid()
+        st.session_state.workflow_graph = mermaid_code
+    
+    # streamlit-mermaidを使用してグラフを視覚化
+    st.markdown("### グラフの視覚化")
+    st_mermaid(st.session_state.workflow_graph, show_controls=False)
+    
+    # Mermaidダイアグラムをテキスト形式で表示
+    st.markdown("### Mermaidグラフ (テキスト形式)")
+    st.code(st.session_state.workflow_graph, language="mermaid")
 with main_tab:
     # マルチエージェントRAGセクション
     st.header("マルチエージェントRAG")
@@ -116,22 +134,4 @@ with documents_tab:
     else:
         st.info("検索されたドキュメントはまだありません。メインチャットタブで質問を入力してください。")
 
-with workflow_tab:
-    st.header("エージェントのワークフローグラフ")
-    
-    # エージェントのワークフローグラフを取得して表示
-    if 'workflow_graph' not in st.session_state:
-        # エージェントのグラフを生成
-        graph = create_multi_agent_rag(doc_store)
-        # Mermaidダイアグラムを取得
-        mermaid_code = graph.get_graph().draw_mermaid()
-        st.session_state.workflow_graph = mermaid_code
-    
-    # streamlit-mermaidを使用してグラフを視覚化
-    st.markdown("### グラフの視覚化")
-    st_mermaid(st.session_state.workflow_graph, show_controls=False)
-    
-    # Mermaidダイアグラムをテキスト形式で表示
-    st.markdown("### Mermaidグラフ (テキスト形式)")
-    st.code(st.session_state.workflow_graph, language="mermaid")
     
