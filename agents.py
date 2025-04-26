@@ -8,7 +8,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableBranch, Runnable
 from langchain_core.tools import tool
 from langchain_core.documents import Document
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from document_store import DocumentStore
 from IPython.display import Image, display
 
@@ -200,20 +200,18 @@ def create_multi_agent_rag(document_store: DocumentStore = None):
     workflow.add_node("endagent", lambda state: { "response": state["response"], "next": "end"})
     
     # エッジを定義（エージェント間の遷移）
+    workflow.add_edge(START, "planner")
     workflow.add_conditional_edges("retriever", route)
     workflow.add_conditional_edges("planner", route)
     workflow.add_conditional_edges("responder", route)
     
     # 開始ノードを設定
-    workflow.set_entry_point("retriever")
     workflow.set_finish_point("endagent")
 
     graph = workflow.compile()
     
     # Mermaidダイアグラムを取得（コメントアウトを解除）
     mermaid_diagram = graph.get_graph().draw_mermaid()
-    print("Workflow Graph (Mermaid):")
-    print(mermaid_diagram)
         
     # グラフをコンパイル
     return graph
