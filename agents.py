@@ -12,6 +12,12 @@ from langgraph.graph import StateGraph, END
 from document_store import DocumentStore
 from IPython.display import Image, display
 
+os.environ["LANGSMITH_TRACING"]="true"
+os.environ["LANGSMITH_ENDPOINT"]="https://api.smith.langchain.com"
+os.environ["LANGSMITH_API_KEY"]=os.getenv("LANGSMITH_API_KEY")
+os.environ["LANGSMITH_PROJECT"]="pr-virtual-clay-8"
+os.environ["OPENAI_API_KEY"]=os.getenv("OPENAI_API_KEY")
+
 # 状態の型定義
 class AgentState(TypedDict):
     messages: List[Any]  # HumanMessageやAIMessageのリスト
@@ -165,7 +171,7 @@ def create_responder_agent():
     return _response_chain
 
 # 状態の遷移ルートを決定する関数
-def route(state: AgentState) -> Literal["retriever", "planner", "responder", "end"]:
+def route(state: AgentState) -> Literal["retriever", "planner", "responder", "endagent"]:
     print(state["messages"])
     return state["next"]
 
@@ -191,7 +197,7 @@ def create_multi_agent_rag(document_store: DocumentStore = None):
     workflow.add_node("retriever", create_retriever_agent(document_store))
     workflow.add_node("planner", create_planner_agent())
     workflow.add_node("responder", create_responder_agent())
-    workflow.add_node("end", lambda state: { "response": state["response"], "next": "end"})
+    workflow.add_node("endagent", lambda state: { "response": state["response"], "next": "end"})
     
     # エッジを定義（エージェント間の遷移）
     workflow.add_conditional_edges("retriever", route)
@@ -200,10 +206,14 @@ def create_multi_agent_rag(document_store: DocumentStore = None):
     
     # 開始ノードを設定
     workflow.set_entry_point("retriever")
-    workflow.set_finish_point("end")
+    workflow.set_finish_point("endagent")
 
     graph = workflow.compile()
-    print(graph.get_graph().draw_mermaid())
+    
+    # Mermaidダイアグラムを取得（コメントアウトを解除）
+    mermaid_diagram = graph.get_graph().draw_mermaid()
+    print("Workflow Graph (Mermaid):")
+    print(mermaid_diagram)
         
     # グラフをコンパイル
     return graph

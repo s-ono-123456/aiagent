@@ -9,3 +9,5 @@ langsmith
 faiss-cpu
 sentence-transformers
 langchain-huggingface
+sentencepiece
+streamlit-mermaid

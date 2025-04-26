@@ -2,8 +2,9 @@ import streamlit as st
 import openai
 import os
 from llm_client import get_gpt_response
-from agents import get_multi_agent_response
+from agents import get_multi_agent_response, create_multi_agent_rag
 from document_store import DocumentStore
+from streamlit_mermaid import st_mermaid
 
 # OpenAI APIキーの設定
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -12,7 +13,17 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 @st.cache_resource
 def get_document_store():
     doc_store = DocumentStore()
-    # サンプルドキュメントを追加
+    
+    # 既存のインデックスを使用するか確認
+    if os.path.exists("indexes"):
+        # インデックスが既に存在する場合はインデックスから読み込む
+        return doc_store
+    
+    # インデックスが存在しない場合は、サンプルディレクトリからドキュメントを読み込む
+    if os.path.exists("sample"):
+        doc_store.load_documents_from_directory("sample")
+    
+    # サンプルドキュメントも追加
     sample_texts = [
         "LangGraphは、LangChainエコシステムの一部で、複雑なAIアプリケーションを構築するためのフレームワークです。",
         "LangGraphを使用すると、複数のエージェントを組み合わせたワークフローを定義できます。",
@@ -21,64 +32,104 @@ def get_document_store():
         "エージェントは特定のタスクに最適化された専門家として機能し、より複雑な問題を解決するために協力します。"
     ]
     doc_store.add_documents(sample_texts)
+    
+    # インデックスを保存
+    doc_store.save_all_indexes()
+    
     return doc_store
 
 # Streamlitの設定
 st.title("マルチエージェント型RAGサンプル")
 st.write("このアプリはLangGraphを使用したマルチエージェント型RAGのサンプル実装です。")
 
-# タブを作成
-tab1, tab2 = st.tabs(["シンプルLLM", "マルチエージェントRAG"])
+# ドキュメントストアの初期化
+doc_store = get_document_store()
+categories = doc_store.get_all_categories()
 
-with tab1:
-    st.header("シンプルLLM")
-    st.write("直接LLMに質問を投げるシンプルな対話です。")
-    
-    # ユーザーからの入力を受け取る
-    user_input_simple = st.text_input("質問を入力してください:", key="simple_input")
-    
-    if user_input_simple:
-        with st.spinner("回答を生成中..."):
-            response = get_gpt_response(user_input_simple)
-            st.write("応答:", response)
+# タブの作成
+main_tab, thoughts_tab, workflow_tab, add_doc_tab = st.tabs(["メインチャット", "エージェント思考過程", "ワークフローグラフ", "ドキュメント追加"])
 
-with tab2:
+with main_tab:
+    # マルチエージェントRAGセクション
     st.header("マルチエージェントRAG")
     st.write("LangGraphを使用したマルチエージェント型RAGシステムです。複数の専門エージェントが協力して回答を生成します。")
-    
+
+    # カテゴリ選択（もしあれば）
+    selected_category = None
+    if categories:
+        selected_category = st.selectbox(
+            "検索対象カテゴリ", 
+            ["すべて"] + categories, 
+            index=0
+        )
+        
+        if selected_category == "すべて":
+            selected_category = None
+
     # 思考過程を表示するかどうかのチェックボックス
     show_thoughts = st.checkbox("エージェントの思考過程を表示", value=True)
-    
+
     # ユーザーからの入力を受け取る
     user_input_rag = st.text_input("質問を入力してください:", key="rag_input")
-    
+
+    # 結果表示用のセッション状態変数
+    if 'result' not in st.session_state:
+        st.session_state.result = None
+
     # ユーザー入力があれば
     if user_input_rag:
         with st.spinner("マルチエージェントRAGシステムが回答を生成中..."):
-            # ドキュメントストアを取得
-            doc_store = get_document_store()
-            
             # マルチエージェントRAGで回答を生成
-            result = get_multi_agent_response(user_input_rag, doc_store, show_thoughts)
-            
-            # 思考過程を表示（オプション）
-            if show_thoughts and "thoughts" in result:
-                st.subheader("エージェントの思考過程:")
-                st.text(result["thoughts"])
+            st.session_state.result = get_multi_agent_response(user_input_rag, doc_store, show_thoughts)
             
             # 最終的な応答を表示
             st.subheader("最終応答:")
-            st.write(result["response"])
+            st.write(st.session_state.result["response"])
+
+with thoughts_tab:
+    st.header("エージェントの思考過程")
     
-    # ドキュメント追加機能
-    st.divider()
-    st.subheader("ドキュメントの追加")
+    if st.session_state.get('result') and "thoughts" in st.session_state.result:
+        st.text(st.session_state.result["thoughts"])
+    else:
+        st.info("エージェントの思考過程はまだありません。メインチャットタブで質問を入力してください。")
+
+with workflow_tab:
+    st.header("エージェントのワークフローグラフ")
+    
+    # エージェントのワークフローグラフを取得して表示
+    if 'workflow_graph' not in st.session_state:
+        # エージェントのグラフを生成
+        graph = create_multi_agent_rag(doc_store)
+        # Mermaidダイアグラムを取得
+        mermaid_code = graph.get_graph().draw_mermaid()
+        st.session_state.workflow_graph = mermaid_code
+    
+    # streamlit-mermaidを使用してグラフを視覚化
+    st.markdown("### グラフの視覚化")
+    st_mermaid(st.session_state.workflow_graph)
+    
+    # Mermaidダイアグラムをテキスト形式で表示
+    st.markdown("### Mermaidグラフ (テキスト形式)")
+    st.code(st.session_state.workflow_graph, language="mermaid")
+    
+
+with add_doc_tab:
+    st.header("ドキュメントの追加")
     
     new_doc = st.text_area("新しいドキュメントを追加:", placeholder="ここに新しいドキュメントを入力してください")
+
+    # カテゴリ選択
+    new_doc_category = st.selectbox(
+        "追加先カテゴリ", 
+        ["default"] + categories, 
+        index=0
+    )
+
     if st.button("追加"):
         if new_doc:
-            doc_store = get_document_store()
-            doc_store.add_documents([new_doc])
-            st.success("ドキュメントが追加されました！")
+            doc_store.add_documents([new_doc], category=new_doc_category)
+            doc_store.save_index(new_doc_category)
+            st.success(f"ドキュメントがカテゴリ「{new_doc_category}」に追加されました！")
         else:
             st.error("ドキュメントを入力してください")
